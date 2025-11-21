@@ -1,0 +1,331 @@
+{
+  "name": "Universal File Analyzer Bot",
+  "nodes": [
+    {
+      "id": "TelegramTrigger",
+      "parameters": {
+        "updates": ["message"]
+      },
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM__",
+          "name": "TELEGRAM_CREDENTIAL"
+        }
+      },
+      "position": [300, 200]
+    },
+
+    {
+      "id": "EmailTrigger",
+      "parameters": {
+        "format": "json"
+      },
+      "name": "IMAP Email Trigger",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 1,
+      "credentials": {
+        "imap": {
+          "id": "__REPLACE_IMAP__",
+          "name": "IMAP_CREDENTIAL"
+        }
+      },
+      "position": [300, 500]
+    },
+
+    {
+      "id": "MergeInput",
+      "parameters": {
+        "mode": "mergeByIndex"
+      },
+      "name": "Merge Inputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [580, 350]
+    },
+
+    {
+      "id": "FileTypeDetector",
+      "parameters": {
+        "functionCode": "const item = items[0];\n\nlet fileName = '';\nlet mime = '';\n\nif (item.binary && item.binary.data) {\n  fileName = item.binary.data.fileName || 'unknown';\n  mime = item.binary.data.mimeType || '';\n}\n\nreturn [{ fileName, mime, ext: fileName.split('.').pop().toLowerCase() }];"
+      },
+      "name": "File Type Detector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [850, 350]
+    },
+
+    {
+      "id": "SwitchFileType",
+      "parameters": {
+        "rules": [
+          { "type": "string", "value1": "txt" },
+          { "type": "string", "value1": "pdf" },
+          { "type": "string", "value1": "docx" },
+          { "type": "string", "value1": "jpg" },
+          { "type": "string", "value1": "png" }
+        ]
+      },
+      "name": "Switch File Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [1100, 350]
+    },
+
+    {
+      "id": "TXT Extract",
+      "parameters": {
+        "functionCode": "return [{ text: $binary.data.data.toString() }];"
+      },
+      "name": "TXT Extract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1350, 180]
+    },
+
+    {
+      "id": "PDF Extract",
+      "parameters": {
+        "options": {}
+      },
+      "name": "PDF Extract",
+      "type": "n8n-nodes-base.pdfExtract",
+      "typeVersion": 1,
+      "position": [1350, 290]
+    },
+
+    {
+      "id": "DOCX Extract",
+      "parameters": {},
+      "name": "DOCX Extract",
+      "type": "n8n-nodes-base.docxExtract",
+      "typeVersion": 1,
+      "position": [1350, 400]
+    },
+
+    {
+      "id": "OCR via GPT Vision",
+      "parameters": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "body": {
+          "model": "gpt-4o-mini",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Ты OCR система. Извлеки текст с картинки."
+            },
+            {
+              "role": "user",
+              "content": "Извлеки текст: {{$binary.data}}"
+            }
+          ]
+        },
+        "authentication": "none"
+      },
+      "name": "OCR GPT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [1350, 520]
+    },
+
+    {
+      "id": "AssemblePrompt",
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "prompt",
+              "value": "Ты — ИИ, который структурирует содержимое файла. Создай:\n- краткое резюме\n- ключевые темы\n- структуру разделов\n- категории\nТекст:\n{{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "name": "Assemble Prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1650, 350]
+    },
+
+    {
+      "id": "GPT Process",
+      "parameters": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "body": {
+          "model": "gpt-4o-mini",
+          "messages": [
+            {
+              "role": "user",
+              "content": "{{$json.prompt}}"
+            }
+          ]
+        },
+        "authentication": "none"
+      },
+      "name": "GPT Structuring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [1850, 350]
+    },
+
+    {
+      "id": "PostgreSQL Save",
+      "parameters": {
+        "operation": "insert",
+        "table": "files",
+        "columns": "file_name,text_structured",
+        "values": "{{$json.fileName}},{{$json.choices[0].message.content}}"
+      },
+      "name": "Save to PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "credentials": {
+        "postgres": {
+          "id": "__REPLACE_POSTGRES__",
+          "name": "POSTGRES_CREDENTIAL"
+        }
+      },
+      "position": [2050, 260]
+    },
+
+    {
+      "id": "SendTelegram",
+      "parameters": {
+        "chatId": "={{$json.chat_id}}",
+        "text": "Вот структурированная версия файла:\n{{$json.choices[0].message.content}}"
+      },
+      "name": "Send Telegram Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM__",
+          "name": "TELEGRAM_CREDENTIAL"
+        }
+      },
+      "position": [2050, 350]
+    },
+
+    {
+      "id": "ObsidianPlaceholder",
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "note",
+              "value": "Сюда вставишь команду для сохранения в Obsidian.\nТекст:\n{{$json.choices[0].message.content}}"
+            }
+          ]
+        }
+      },
+      "name": "Obsidian Placeholder",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [2050, 430]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          { "node": "Merge Inputs", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "IMAP Email Trigger": {
+      "main": [
+        [
+          { "node": "Merge Inputs", "type": "main", "index": 1 }
+        ]
+      ]
+    },
+    "Merge Inputs": {
+      "main": [
+        [
+          { "node": "File Type Detector", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "File Type Detector": {
+      "main": [
+        [
+          { "node": "Switch File Type", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Switch File Type": {
+      "main": [
+        [
+          { "node": "TXT Extract", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "PDF Extract", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "DOCX Extract", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "OCR GPT", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "OCR GPT", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "TXT Extract": {
+      "main": [
+        [
+          { "node": "Assemble Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "PDF Extract": {
+      "main": [
+        [
+          { "node": "Assemble Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "DOCX Extract": {
+      "main": [
+        [
+          { "node": "Assemble Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "OCR GPT": {
+      "main": [
+        [
+          { "node": "Assemble Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Assemble Prompt": {
+      "main": [
+        [
+          { "node": "GPT Structuring", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GPT Structuring": {
+      "main": [
+        [
+          { "node": "Save to PostgreSQL", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Send Telegram Message", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Obsidian Placeholder", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  }
+}
